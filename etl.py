@@ -156,7 +156,7 @@ def run_etl_pipeline(
     return output_dirs, stats
 
 def main():
-    parser = argparse.ArgumentParser(description='Run the ETL pipeline for object detection dataset')
+    parser = argparse.ArgumentParser(description='ETL pipeline for preparing medical imaging data for object detection models')
     parser.add_argument('--data-dir', type=str, default='data/raw', help='Input data directory')
     parser.add_argument('--output-dir', type=str, default='data/processed', help='Output directory for processed data')
     parser.add_argument('--model', type=str, choices=['yolo', 'maskrcnn', 'ssd'], action='append', 
