@@ -172,3 +172,23 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Project-specific ignores
+# Data files
+data/processed/
+data/runs/
+/runs/
+
+# Model weights and artifacts
+models/**/weights/
+models/**/runs/
+*.pt
+*.onnx
+
+# IDE specific files
+.vscode/
+.idea/
+
+# OS specific files
+.DS_Store
+Thumbs.db
