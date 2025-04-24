@@ -9,12 +9,12 @@ import json
 import shutil
 
 class DataTransformer:
-    def __init__(self, output_dir="data_processed", apply_normalization=False):
+    def __init__(self, output_dir=None, apply_normalization=False):
         """
         Initialize the data transformer.
         
         Args:
-            output_dir (str): Directory to save processed data
+            output_dir (str, optional): Directory to save processed data. If None, no default directory is created.
             apply_normalization (bool): Whether to apply normalization
         """
         self.output_dir = Path(output_dir) if output_dir else None

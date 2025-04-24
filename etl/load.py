@@ -371,22 +371,3 @@ class DataLoader:
             f.write("This will be implemented in a future update.\n")
         
         return str(output_dir)
-
-if __name__ == "__main__":
-    # Example usage
-    loader = DataLoader()
-    
-    # Prepare datasets for PyTorch-based models
-    dataloaders, datasets = loader.prepare_pytorch_datasets()
-    
-    # Prepare YOLO configuration
-    yolo_config = loader.prepare_yolo_config()
-    print(f"YOLO config file: {yolo_config}")
-    
-    # Prepare Mask R-CNN format data
-    maskrcnn_dir = loader.prepare_maskrcnn_format()
-    print(f"Mask R-CNN data directory: {maskrcnn_dir}")
-    
-    # Prepare SSD format data
-    ssd_dir = loader.prepare_ssd_format()
-    print(f"SSD data directory: {ssd_dir}")

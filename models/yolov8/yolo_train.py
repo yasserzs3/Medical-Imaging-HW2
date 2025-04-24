@@ -75,9 +75,11 @@ def train_yolov8(
             # Download weights and save to weights directory
             downloaded_path = attempt_download_asset(model_name)
             if downloaded_path != str(pretrained_path):
-                shutil.copy2(downloaded_path, pretrained_path)
                 if verbose:
-                    print(f"Copied weights from {downloaded_path} to {pretrained_path}")
+                    print(f"Moving weights from {downloaded_path} to {pretrained_path}")
+                shutil.move(downloaded_path, pretrained_path)
+                if verbose:
+                    print(f"Moved weights to {pretrained_path}")
         
         # Load model from the weights directory
         model = YOLO(pretrained_path)
