@@ -7,6 +7,9 @@ from pathlib import Path
 import random
 import json
 import shutil
+import yaml
+import torch
+import torchvision.transforms as transforms
 
 class DataTransformer:
     def __init__(self, output_dir=None, apply_normalization=False):
@@ -58,7 +61,7 @@ class DataTransformer:
             A.Rotate(limit=5, p=0.3),
             A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0.04, val_shift_limit=0, p=0.5),
             A.GaussianBlur(blur_limit=3, p=0.2),
-            A.GaussNoise(var_limit=0.001, p=0.3),
+            A.GaussNoise(p=0.3),
             A.Resize(640, 640),  # Final resize to target size
         ]
         
@@ -113,7 +116,7 @@ class DataTransformer:
         new_anno = {
             "info": annotations.get("info", {}),
             "licenses": annotations.get("licenses", []),
-            "categories": annotations.get("categories", []),
+            "categories": annotations.get("categories", []),  # Preserve categories
             "images": [],
             "annotations": []
         }
@@ -248,10 +251,6 @@ class DataTransformer:
                         new_anno_id += 1
                     
                     new_image_id += 1
-        
-        # Save annotations
-        with open(split_dir / "_annotations.coco.json", 'w') as f:
-            json.dump(new_anno, f)
         
         print(f"Processed {split} split: {len(new_anno['images'])} images, {len(new_anno['annotations'])} annotations")
         
@@ -415,24 +414,24 @@ class DataTransformer:
                 continue
                 
             # Count categories
-            categories = {cat['id']: cat['name'] for cat in anno['categories']}
+            categories = {cat['id']: cat['name'] for cat in anno.get('categories', [])}
             cat_counts = {cat_name: 0 for cat_id, cat_name in categories.items()}
             
             # Count annotations per category
-            for a in anno['annotations']:
+            for a in anno.get('annotations', []):
                 cat_id = a['category_id'] 
                 cat_name = categories.get(cat_id, f"Unknown-{cat_id}")
                 cat_counts[cat_name] = cat_counts.get(cat_name, 0) + 1
             
             # Collect bounding box stats
-            if len(anno['annotations']) > 0:
+            if len(anno.get('annotations', [])) > 0:
                 boxes = np.array([a['bbox'] for a in anno['annotations']])
                 box_widths = boxes[:, 2]
                 box_heights = boxes[:, 3]
                 
                 stats[split] = {
-                    'num_images': len(anno['images']),
-                    'num_annotations': len(anno['annotations']),
+                    'num_images': len(anno.get('images', [])),
+                    'num_annotations': len(anno.get('annotations', [])),
                     'categories': categories,
                     'category_counts': cat_counts,
                     'avg_box_width': float(np.mean(box_widths)),
@@ -444,7 +443,7 @@ class DataTransformer:
                 }
             else:
                 stats[split] = {
-                    'num_images': len(anno['images']),
+                    'num_images': len(anno.get('images', [])),
                     'num_annotations': 0,
                     'categories': categories,
                     'category_counts': cat_counts,
@@ -649,15 +648,209 @@ class DataTransformer:
         
         print(f"Created YOLOv8 dataset.yaml configuration file at {output_dir / 'dataset.yaml'}")
 
-if __name__ == "__main__":
-    from extract import DataExtractor
-    
-    # Example usage
-    extractor = DataExtractor("data")
-    annotations, image_paths = extractor.extract_all()
-    
-    # Option 2: Direct conversion (recommended)
-    transformer = DataTransformer(None)  # No output directory needed
-    transformer.convert_to_yolov8_format_direct(annotations, image_paths, "data_yolo")
-    
-    print("ETL pipeline completed successfully!")
+    def convert_to_ssd_format(self, annotations, image_paths, output_dir, apply_augmentation=False):
+        """
+        Convert dataset to SSD format.
+        
+        Args:
+            annotations (dict): Annotations dictionary
+            image_paths (dict): Dictionary of image paths for each split
+            output_dir (str): Output directory
+            apply_augmentation (bool): Whether to apply augmentation
+        
+        Returns:
+            dict: Dataset statistics
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create directories for each split
+        for split in ['train', 'valid', 'test']:
+            split_dir = output_dir / split
+            split_dir.mkdir(exist_ok=True)
+        
+        # Process each split
+        stats = {}
+        for split in ['train', 'valid', 'test']:
+            if split not in annotations:
+                continue
+                
+            split_annotations = annotations[split]
+            split_image_paths = image_paths[split]
+            split_dir = output_dir / split
+            
+            # Create a map from file_name to image_id and path
+            file_to_info = {}
+            for path in split_image_paths:
+                file_name = Path(path).name
+                file_to_info[file_name] = {
+                    'path': path,
+                    'id': None
+                }
+            
+            # Update with image IDs from annotations
+            for img in split_annotations['images']:
+                if img['file_name'] in file_to_info:
+                    file_to_info[img['file_name']]['id'] = img['id']
+            
+            # Create a map from image_id to its annotations
+            id_to_annos = {}
+            for anno in split_annotations['annotations']:
+                image_id = anno['image_id']
+                if image_id not in id_to_annos:
+                    id_to_annos[image_id] = []
+                id_to_annos[image_id].append(anno)
+            
+            # Process each image
+            processed_count = 0
+            processed_data = []
+            
+            for image_info in split_annotations['images']:
+                file_name = image_info['file_name']
+                
+                # Get image path from our mapping
+                if file_name not in file_to_info:
+                    print(f"Warning: Image {file_name} not found in image paths")
+                    continue
+                    
+                image_path = file_to_info[file_name]['path']
+                image_id = file_to_info[file_name]['id']
+                
+                # Load and process image
+                try:
+                    image = Image.open(image_path).convert('RGB')
+                except Exception as e:
+                    print(f"Error loading image {image_path}: {e}")
+                    continue
+                
+                # Get annotations for this image
+                img_annos = id_to_annos.get(image_id, [])
+                if not img_annos:
+                    print(f"Warning: No annotations found for image {file_name}")
+                    continue
+                
+                # Extract bounding boxes and category IDs
+                boxes = []
+                labels = []
+                for anno in img_annos:
+                    bbox = anno['bbox']  # [x, y, width, height]
+                    x1 = bbox[0] / image_info['width']
+                    y1 = bbox[1] / image_info['height']
+                    x2 = (bbox[0] + bbox[2]) / image_info['width']
+                    y2 = (bbox[1] + bbox[3]) / image_info['height']
+                    
+                    boxes.append([x1, y1, x2, y2])
+                    labels.append(anno['category_id'])
+                
+                # Convert to tensors
+                boxes = torch.tensor(boxes, dtype=torch.float32)
+                labels = torch.tensor(labels, dtype=torch.long)
+                
+                # Process the base image
+                processed_filename = f"{processed_count:06d}.jpg"
+                processed_img_path = split_dir / processed_filename
+                
+                # Transform image for SSD
+                image_tensor = transforms.Compose([
+                    transforms.Resize((300, 300)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                      std=[0.229, 0.224, 0.225])
+                ])(image)
+                
+                # Save the processed image
+                img_to_save = transforms.ToPILImage()(image_tensor)
+                img_to_save.save(processed_img_path)
+                
+                # Save the annotations
+                anno_filename = f"{processed_count:06d}.txt"
+                anno_path = split_dir / anno_filename
+                
+                with open(anno_path, 'w') as f:
+                    for box, label in zip(boxes, labels):
+                        # Convert box coordinates to YOLO format
+                        x1, y1, x2, y2 = box.tolist()
+                        w = x2 - x1
+                        h = y2 - y1
+                        x_center = x1 + w/2
+                        y_center = y1 + h/2
+                        
+                        # Write to file: class_id, x_center, y_center, width, height
+                        f.write(f"{label.item()} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
+                
+                processed_data.append((image_tensor, (boxes, labels)))
+                processed_count += 1
+                
+                # Apply augmentations for training data
+                if split == 'train' and apply_augmentation:
+                    for aug_idx in range(2):  # Create 2 augmented versions per image
+                        aug_img_filename = f"{processed_count:06d}.jpg"
+                        
+                        # Apply augmentation transform to original image
+                        aug_image, aug_bboxes, aug_category_ids = self.transform_image(
+                            np.array(image), boxes.tolist(), labels.tolist(), augment=True
+                        )
+                        
+                        # Transform augmented image for SSD
+                        aug_image_tensor = transforms.Compose([
+                            transforms.Resize((300, 300)),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                              std=[0.229, 0.224, 0.225])
+                        ])(Image.fromarray(aug_image))
+                        
+                        # Save augmented image
+                        aug_img_to_save = transforms.ToPILImage()(aug_image_tensor)
+                        aug_output_path = split_dir / aug_img_filename
+                        aug_img_to_save.save(aug_output_path)
+                        
+                        # Create annotation file for augmented image
+                        aug_anno_filename = f"{processed_count:06d}.txt"
+                        aug_anno_path = split_dir / aug_anno_filename
+                        
+                        with open(aug_anno_path, 'w') as f:
+                            for box, label in zip(aug_bboxes, aug_category_ids):
+                                # Convert box coordinates to YOLO format
+                                x1, y1, w, h = box  # Already normalized by transform
+                                x2, y2 = x1 + w, y1 + h
+                                x_center = x1 + w/2
+                                y_center = y1 + h/2
+                                
+                                # Write to file: class_id, x_center, y_center, width, height
+                                f.write(f"{label} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
+                        
+                        processed_data.append((aug_image_tensor, (torch.tensor(aug_bboxes), torch.tensor(aug_category_ids))))
+                        processed_count += 1
+            
+            print(f"Processed {split} split: {processed_count} images")
+            
+            # Save dataset statistics
+            stats[split] = {
+                'num_images': processed_count,
+                'num_annotations': sum(len(annos) for annos in id_to_annos.values()),
+                'categories': {cat['id']: cat['name'] for cat in split_annotations['categories']},
+                'category_counts': {cat['id']: 0 for cat in split_annotations['categories']}
+            }
+            
+            # Update category counts
+            for annos in id_to_annos.values():
+                for anno in annos:
+                    stats[split]['category_counts'][anno['category_id']] += 1
+        
+        # Create dataset.yaml file
+        yaml_path = output_dir / 'dataset.yaml'
+        yaml_content = {
+            'path': str(output_dir.absolute()),
+            'train': str((output_dir / 'train').absolute()),
+            'val': str((output_dir / 'valid').absolute()),
+            'test': str((output_dir / 'test').absolute()),
+            'nc': len(stats['train']['categories']) if 'train' in stats else 0,
+            'names': [name for _, name in sorted(stats['train']['categories'].items())] if 'train' in stats else []
+        }
+        
+        with open(yaml_path, 'w') as f:
+            yaml.safe_dump(yaml_content, f, sort_keys=False)
+        
+        return stats
+
+

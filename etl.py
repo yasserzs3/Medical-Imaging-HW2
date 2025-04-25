@@ -129,18 +129,22 @@ def run_etl_pipeline(
             if verbose:
                 print(f"\n=== PROCESSING FOR SSD FORMAT ===\n")
             
-            # Placeholder for SSD processing  
-            ssd_dir = model_dirs['ssd']
-            ssd_dir.mkdir(exist_ok=True, parents=True)
-            
-            # Create a README file as a placeholder
-            with open(ssd_dir / "README.md", 'w') as f:
-                f.write("# SSD Dataset\n\n")
-                f.write("Placeholder for SSD format dataset.\n")
-                f.write("This will be implemented in a future update.\n")
+            # Process data to SSD format
+            transformer = DataTransformer(output_dir=str(model_dirs['ssd']), apply_normalization=apply_normalization)
+            transformer.convert_to_ssd_format(
+                annotations,
+                image_paths,
+                str(model_dirs['ssd']),
+                apply_augmentation=apply_augmentation
+            )
             
             if verbose:
-                print(f"Created placeholder for SSD at: {ssd_dir}")
+                print(f"SSD dataset created at: {model_dirs['ssd']}")
+                print(f"Dataset structure:")
+                print(f"  - {model_dirs['ssd']}/train/")
+                print(f"  - {model_dirs['ssd']}/val/")
+                print(f"  - {model_dirs['ssd']}/test/")
+                print(f"  - {model_dirs['ssd']}/dataset.yaml")
     
     elapsed_time = time.time() - start_time
     if verbose:
