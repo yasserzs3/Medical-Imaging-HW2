@@ -112,18 +112,27 @@ def run_etl_pipeline(
             if verbose:
                 print(f"\n=== PROCESSING FOR MASK R-CNN FORMAT ===\n")
             
-            # Placeholder for Mask R-CNN processing
-            maskrcnn_dir = model_dirs['maskrcnn']
-            maskrcnn_dir.mkdir(exist_ok=True, parents=True)
+            # Process data for Mask R-CNN
+            transformer = DataTransformer(output_dir=str(model_dirs['maskrcnn']), apply_normalization=apply_normalization)
             
-            # Create a README file as a placeholder
-            with open(maskrcnn_dir / "README.md", 'w') as f:
-                f.write("# Mask R-CNN Dataset\n\n")
-                f.write("Placeholder for Mask R-CNN format dataset.\n")
-                f.write("This will be implemented in a future update.\n")
+            # Transform the dataset with masks
+            transformed_annotations = transformer.transform_all(
+                annotations,
+                image_paths,
+                apply_augmentation=apply_augmentation
+            )
+            
+            # Create Mask R-CNN dataset
+            loader = DataLoader(coco_data_dir=str(model_dirs['maskrcnn']))
+            loader.prepare_maskrcnn_format(transformed_annotations, str(model_dirs['maskrcnn']))
             
             if verbose:
-                print(f"Created placeholder for Mask R-CNN at: {maskrcnn_dir}")
+                print(f"Mask R-CNN dataset created at: {model_dirs['maskrcnn']}")
+                print(f"Dataset structure:")
+                print(f"  - {model_dirs['maskrcnn']}/train/")
+                print(f"  - {model_dirs['maskrcnn']}/valid/")
+                print(f"  - {model_dirs['maskrcnn']}/test/")
+                print(f"  - {model_dirs['maskrcnn']}/_annotations.coco.json")
                 
         elif model == 'ssd':
             if verbose:

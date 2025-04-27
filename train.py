@@ -4,9 +4,23 @@ from pathlib import Path
 import time
 import yaml
 import torch
+import sys
+
+# Add the project root to the Python path
+sys.path.append(str(Path(__file__).parent))
 
 # Import model-specific training functions
 from models.yolov8.yolo_train import train_yolov8
+from models.r_cnn.train import (
+    get_model,
+    train_one_epoch,
+    evaluate_metrics,
+    get_transform,
+    collate_fn
+)
+from etl.load import CocoDetectionMaskRCNNDataset
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 def train_maskrcnn(
     data_dir='data/processed/maskrcnn',
@@ -15,22 +29,189 @@ def train_maskrcnn(
     epochs=20,
     batch_size=4,
     device='0',  # Default to first GPU
-    verbose=True
+    verbose=True,
+    lr=0.005,
+    momentum=0.9,
+    weight_decay=0.0005
 ):
     """
     Train Mask R-CNN model on the prepared dataset.
     
-    Note: This is a placeholder for future implementation.
-    """
-    if verbose:
-        print("\n=== MASK R-CNN TRAINING NOT YET IMPLEMENTED ===\n")
+    Args:
+        data_dir (str): Directory containing the dataset
+        runs_dir (str): Directory for training runs and logs
+        weights_dir (str): Directory to save model weights
+        epochs (int): Number of epochs to train for
+        batch_size (int): Batch size for training
+        device (str): Device to use (cuda device, i.e. 0 or 0,1,2,3 or cpu)
+        verbose (bool): Whether to print verbose output
+        lr (float): Learning rate
+        momentum (float): Momentum for SGD
+        weight_decay (float): Weight decay for SGD
     
-    # Placeholder to simulate training
-    time.sleep(2)
+    Returns:
+        dict: Training metrics
+    """
+    start_time = time.time()
+    
+    # Create directories
+    runs_dir = Path(runs_dir)
+    weights_dir = Path(weights_dir)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Set up device
+    if device == 'cpu':
+        device = torch.device('cpu')
+    else:
+        device = torch.device(f'cuda:{device}')
+    
+    if verbose:
+        print("\n=== STARTING MASK R-CNN TRAINING ===\n")
+        print(f"Using device: {device}")
+        print(f"Batch size: {batch_size}")
+        print(f"Epochs: {epochs}")
+    
+    # Create TensorBoard writer
+    writer = SummaryWriter(log_dir=runs_dir / 'logs')
+    
+    # Create datasets
+    train_dataset = CocoDetectionMaskRCNNDataset(
+        root=os.path.join(data_dir, 'train'),
+        annFile=os.path.join(data_dir, 'train', '_annotations.coco.json'),
+        transform=get_transform(train=True)
+    )
+    
+    valid_dataset = CocoDetectionMaskRCNNDataset(
+        root=os.path.join(data_dir, 'valid'),
+        annFile=os.path.join(data_dir, 'valid', '_annotations.coco.json'),
+        transform=get_transform(train=False)
+    )
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,  # Use 0 for Windows compatibility
+        collate_fn=collate_fn
+    )
+    
+    valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,  # Use 0 for Windows compatibility
+        collate_fn=collate_fn
+    )
+    
+    # Get the model
+    model = get_model(num_classes=train_dataset.num_classes + 1)  # +1 for background
+    model.to(device)
+    
+    # Create optimizer
+    params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.SGD(
+        params,
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay
+    )
+    
+    # Create learning rate scheduler
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=3,
+        gamma=0.1
+    )
+    
+    # Print training configuration
+    if verbose:
+        print("\nTraining Configuration:")
+        print(f"  Batch Size: {batch_size}")
+        print(f"  Number of Epochs: {epochs}")
+        print(f"  Learning Rate: {lr}")
+        print(f"  Device: {device}")
+        print(f"  Number of Classes: {train_dataset.num_classes + 1}")
+        print(f"  Training Images: {len(train_dataset)}")
+        print(f"  Validation Images: {len(valid_dataset)}")
+        print(f"  Iterations per Epoch: {len(train_loader)}\n")
+    
+    # Train the model
+    best_val_iou = 0
+    metrics_history = []
+    
+    for epoch in range(epochs):
+        # Train for one epoch
+        metrics = train_one_epoch(model, optimizer, train_loader, device, epoch, writer, print_freq=10)
+        
+        # Evaluate on validation set
+        val_metrics = evaluate_metrics(model, valid_loader, device)
+        
+        # Print epoch summary
+        if verbose:
+            print(f"\nEpoch {epoch} Summary:")
+            print(f"  Training Metrics:")
+            print(f"    Total Loss: {metrics['total_loss']:.4f}")
+            print(f"    Box Loss: {metrics['box_loss']:.4f}")
+            print(f"    Mask Loss: {metrics['mask_loss']:.4f}")
+            print(f"    Class Loss: {metrics['class_loss']:.4f}")
+            print(f"    Objectness Loss: {metrics['objectness_loss']:.4f}")
+            print(f"    RPN Box Loss: {metrics['rpn_box_loss']:.4f}")
+            print(f"  Validation Metrics:")
+            print(f"    Box IoU: {val_metrics['box_iou']:.4f}")
+            print(f"    Mask IoU: {val_metrics['mask_iou']:.4f}")
+            print(f"    Classification Accuracy: {val_metrics['class_acc']:.4f}\n")
+        
+        # Log validation metrics to TensorBoard
+        writer.add_scalar('val/box_iou', val_metrics['box_iou'], epoch)
+        writer.add_scalar('val/mask_iou', val_metrics['mask_iou'], epoch)
+        writer.add_scalar('val/class_acc', val_metrics['class_acc'], epoch)
+        
+        # Update the learning rate
+        lr_scheduler.step()
+        
+        # Save checkpoint
+        checkpoint = {
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'lr_scheduler': lr_scheduler.state_dict(),
+            'epoch': epoch,
+            'metrics': metrics,
+            'val_metrics': val_metrics
+        }
+        torch.save(checkpoint, weights_dir / f'checkpoint_{epoch}.pth')
+        
+        # Save best model
+        if val_metrics['mask_iou'] > best_val_iou:
+            best_val_iou = val_metrics['mask_iou']
+            torch.save(model.state_dict(), weights_dir / 'model_best.pth')
+        
+        # Save metrics history
+        metrics_history.append({
+            'epoch': epoch,
+            'train_metrics': metrics,
+            'val_metrics': val_metrics
+        })
+    
+    # Save final model
+    torch.save(model.state_dict(), weights_dir / 'model_final.pth')
+    
+    # Save metrics history
+    with open(runs_dir / 'metrics_history.yaml', 'w') as f:
+        yaml.safe_dump(metrics_history, f)
+    
+    writer.close()
+    
+    total_time = time.time() - start_time
+    if verbose:
+        print(f"\n=== MASK R-CNN TRAINING COMPLETED IN {total_time:.2f} SECONDS ===\n")
     
     return {
-        'status': 'not implemented',
-        'message': 'Mask R-CNN training not yet implemented'
+        'status': 'success',
+        'metrics_history': metrics_history,
+        'best_val_iou': best_val_iou,
+        'total_time': total_time
     }
 
 

@@ -94,6 +94,63 @@ class DataTransformer:
         
         return transformed['image'], transformed['bboxes'], transformed['category_ids']
     
+    def transform_image_with_bboxes_and_masks(self, image, bboxes, category_ids, masks, augment=False):
+        """
+        Transform an image with its bounding boxes and segmentation masks.
+        
+        Args:
+            image (np.ndarray): Image to transform
+            bboxes (list): List of bounding boxes in COCO format [x, y, width, height]
+            category_ids (list): List of category IDs
+            masks (list): List of binary masks with shape [H, W]
+            augment (bool): Whether to apply augmentation
+        
+        Returns:
+            tuple: (transformed_image, transformed_bboxes, transformed_category_ids, transformed_masks)
+        """
+        # Create transforms with mask support
+        if augment:
+            transforms = [
+                A.HorizontalFlip(p=0.5),
+                A.RandomCrop(height=608, width=608, p=0.3),
+                A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
+                A.RandomRotate90(p=0.2),
+                A.Rotate(limit=5, p=0.3),
+                A.HueSaturationValue(hue_shift_limit=0, sat_shift_limit=0.04, val_shift_limit=0, p=0.5),
+                A.GaussianBlur(blur_limit=3, p=0.2),
+                A.GaussNoise(p=0.3),
+                A.Resize(640, 640),  # Final resize to target size
+            ]
+            
+            # Add normalization only if requested
+            if self.apply_normalization:
+                transforms.append(A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+        else:
+            transforms = [
+                A.Resize(640, 640),  # Resize to target size
+            ]
+            
+            # Add normalization only if requested
+            if self.apply_normalization:
+                transforms.append(A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+        
+        # Create transform with both bbox and mask params
+        transform = A.Compose(
+            transforms,
+            bbox_params=A.BboxParams(format='coco', label_fields=['category_ids']),
+            mask_params=A.MaskParams(format='mask')
+        )
+        
+        # Apply transformation
+        transformed = transform(
+            image=image,
+            bboxes=bboxes,
+            category_ids=category_ids,
+            masks=masks
+        )
+        
+        return transformed['image'], transformed['bboxes'], transformed['category_ids'], transformed['masks']
+    
     def transform_dataset(self, annotations, image_paths, split, apply_augmentation=True, augmentation_factor=2):
         """
         Transform a dataset split.
