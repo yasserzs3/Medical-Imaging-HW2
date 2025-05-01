@@ -2,7 +2,7 @@
 Mask R-CNN model training module.
 """
 
-from .train import (
+from .r_cnn_train import (
     get_model,
     train_one_epoch,
     evaluate_metrics,
