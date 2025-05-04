@@ -41,7 +41,6 @@ def run_etl_pipeline(
     # Define model-specific paths
     model_dirs = {
         'yolo': Path(output_dir) / 'yolo',
-        'maskrcnn': Path(output_dir) / 'maskrcnn',
         'ssd': Path(output_dir) / 'ssd'
     }
     
@@ -108,32 +107,6 @@ def run_etl_pipeline(
                 print(f"  - {yolo_dir}/labels/test/")
                 print(f"  - {yolo_dir}/dataset.yaml")
             
-        elif model == 'maskrcnn':
-            if verbose:
-                print(f"\n=== PROCESSING FOR MASK R-CNN FORMAT ===\n")
-            
-            # Process data for Mask R-CNN
-            transformer = DataTransformer(output_dir=str(model_dirs['maskrcnn']), apply_normalization=apply_normalization)
-            
-            # Transform the dataset with masks
-            transformed_annotations = transformer.transform_all(
-                annotations,
-                image_paths,
-                apply_augmentation=apply_augmentation
-            )
-            
-            # Create Mask R-CNN dataset
-            loader = DataLoader(coco_data_dir=str(model_dirs['maskrcnn']))
-            loader.prepare_maskrcnn_format(transformed_annotations, str(model_dirs['maskrcnn']))
-            
-            if verbose:
-                print(f"Mask R-CNN dataset created at: {model_dirs['maskrcnn']}")
-                print(f"Dataset structure:")
-                print(f"  - {model_dirs['maskrcnn']}/train/")
-                print(f"  - {model_dirs['maskrcnn']}/valid/")
-                print(f"  - {model_dirs['maskrcnn']}/test/")
-                print(f"  - {model_dirs['maskrcnn']}/_annotations.coco.json")
-                
         elif model == 'ssd':
             if verbose:
                 print(f"\n=== PROCESSING FOR SSD FORMAT ===\n")
@@ -172,7 +145,7 @@ def main():
     parser = argparse.ArgumentParser(description='ETL pipeline for preparing medical imaging data for object detection models')
     parser.add_argument('--data-dir', type=str, default='data/raw', help='Input data directory')
     parser.add_argument('--output-dir', type=str, default='data/processed', help='Output directory for processed data')
-    parser.add_argument('--model', type=str, choices=['yolo', 'maskrcnn', 'ssd'], action='append', 
+    parser.add_argument('--model', type=str, choices=['yolo', 'ssd'], action='append', 
                         help='Model format to generate (can be specified multiple times)')
     parser.add_argument('--apply-augmentation', action='store_true', help='Apply data augmentation transformations')
     parser.add_argument('--apply-normalization', action='store_true', help='Apply normalization to images (makes images look weird when visualized)')

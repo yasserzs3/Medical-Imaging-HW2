@@ -7,7 +7,6 @@ import numpy as np
 from PIL import Image
 import torchvision
 from torch.utils.data import Dataset, DataLoader
-import cv2
 import yaml
 
 class CocoDetectionDataset(Dataset):
@@ -102,162 +101,6 @@ class CocoDetectionDataset(Dataset):
         """
         return len(self.ids)
 
-class CocoDetectionMaskRCNNDataset(Dataset):
-    def __init__(self, root, annFile, transform=None, target_transform=None):
-        """
-        Custom COCO dataset for Mask R-CNN training with segmentation masks.
-        
-        Args:
-            root (str): Root directory where images are stored
-            annFile (str): Path to the annotation file
-            transform (callable, optional): Transform to be applied on the image
-            target_transform (callable, optional): Transform to be applied on the target
-        """
-        self.root = Path(root)
-        
-        with open(annFile, 'r') as f:
-            self.coco = json.load(f)
-        
-        self.ids = [img['id'] for img in self.coco['images']]
-        self.transform = transform
-        self.target_transform = target_transform
-        
-        # Create a mapping from image ID to file name
-        self.id_to_file = {img['id']: img['file_name'] for img in self.coco['images']}
-        
-        # Create a mapping from image ID to its annotations
-        self.id_to_annos = {}
-        for anno in self.coco['annotations']:
-            img_id = anno['image_id']
-            if img_id not in self.id_to_annos:
-                self.id_to_annos[img_id] = []
-            self.id_to_annos[img_id].append(anno)
-        
-        # Create a mapping from category ID to name
-        self.cat_id_to_name = {cat['id']: cat['name'] for cat in self.coco['categories']}
-        
-        # Get the number of categories
-        self.num_classes = len(self.coco['categories'])
-        
-    def _convert_polygons_to_mask(self, segmentation, size):
-        """
-        Convert polygon segmentations to binary masks.
-        
-        Args:
-            segmentation (list): List of polygons, where each polygon is a list of float values
-            size (tuple): Size of the binary mask (height, width)
-        
-        Returns:
-            np.ndarray: Binary mask of shape (height, width)
-        """
-        height, width = size
-        mask = np.zeros((height, width), dtype=np.uint8)
-        
-        # Check if segmentation is in RLE format or polygon format
-        if isinstance(segmentation, dict):
-            # RLE format
-            if 'counts' in segmentation and 'size' in segmentation:
-                from pycocotools import mask as coco_mask
-                mask = coco_mask.decode(segmentation)
-                return mask
-            
-        # Polygon format
-        if isinstance(segmentation, list):
-            # Handle empty segmentation list
-            if not segmentation:
-                return mask
-                
-            # Multiple polygons case
-            if isinstance(segmentation[0], list):
-                # Convert each polygon to a binary mask and combine them
-                for polygon in segmentation:
-                    # Convert to int32 and reshape to nx2 array of (x,y) coordinates
-                    pts = np.array(polygon, dtype=np.int32).reshape(-1, 2)
-                    # Fill polygon
-                    cv2.fillPoly(mask, [pts], 1)
-            else:
-                # Single polygon case
-                pts = np.array(segmentation, dtype=np.int32).reshape(-1, 2)
-                cv2.fillPoly(mask, [pts], 1)
-        
-        return mask
-    
-    def __getitem__(self, index):
-        """
-        Get a sample from the dataset.
-        
-        Args:
-            index (int): Index
-            
-        Returns:
-            tuple: (image, target) where target is the object bounding boxes, labels, and masks
-        """
-        id = self.ids[index]
-        
-        # Load image
-        file_name = self.id_to_file[id]
-        img_path = self.root / file_name
-        image = Image.open(img_path).convert('RGB')
-        
-        # Get image size
-        width, height = image.size
-        
-        # Get annotations
-        annotations = self.id_to_annos.get(id, [])
-        
-        # Prepare target
-        boxes = []
-        labels = []
-        masks = []
-        
-        for anno in annotations:
-            bbox = anno['bbox']  # [x, y, width, height]
-            x, y, w, h = bbox
-            # Convert from [x, y, w, h] (COCO format) to [x1, y1, x2, y2] (Pascal VOC format)
-            x1, y1, x2, y2 = x, y, x + w, y + h
-            boxes.append([x1, y1, x2, y2])
-            labels.append(anno['category_id'])
-            
-            # Get segmentation mask
-            if 'segmentation' in anno:
-                mask = self._convert_polygons_to_mask(anno['segmentation'], (height, width))
-                masks.append(mask)
-        
-        # Convert to tensor
-        boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
-        labels_tensor = torch.tensor(labels, dtype=torch.int64)
-        
-        # Stack masks into a tensor
-        if masks:
-            masks_tensor = torch.stack([torch.tensor(mask, dtype=torch.uint8) for mask in masks])
-        else:
-            # Create empty masks if none exist
-            masks_tensor = torch.zeros((0, height, width), dtype=torch.uint8)
-        
-        target = {
-            'boxes': boxes_tensor,
-            'labels': labels_tensor,
-            'masks': masks_tensor,
-            'image_id': torch.tensor([id], dtype=torch.int64)
-        }
-        
-        if self.transform is not None:
-            image = self.transform(image)
-        
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-        
-        return image, target
-    
-    def __len__(self):
-        """
-        Return the length of the dataset.
-        
-        Returns:
-            int: Length of the dataset
-        """
-        return len(self.ids)
-
 class DataLoader:
     def __init__(self, coco_data_dir="data_processed", yolo_data_dir="data_yolo"):
         """
@@ -319,56 +162,6 @@ class DataLoader:
         
         return dataloader, dataset
     
-    def load_maskrcnn_dataset(self, split, batch_size=4, num_workers=4):
-        """
-        Load a COCO format dataset with mask annotations for Mask R-CNN training.
-        
-        Args:
-            split (str): Dataset split ('train', 'valid', or 'test')
-            batch_size (int): Batch size
-            num_workers (int): Number of worker threads
-        
-        Returns:
-            torch.utils.data.DataLoader: DataLoader for the split
-            CocoDetectionMaskRCNNDataset: The dataset
-        """
-        split_dir = self.coco_data_dir / split
-        ann_file = split_dir / "_annotations.coco.json"
-        
-        if not split_dir.exists() or not ann_file.exists():
-            raise FileNotFoundError(f"Cannot find {split} dataset at {split_dir}")
-        
-        # Define transformations
-        if split == 'train':
-            transform = torchvision.transforms.Compose([
-                torchvision.transforms.ToTensor(),
-                torchvision.transforms.ColorJitter(
-                    brightness=0.1, contrast=0.1, saturation=0.04, hue=0
-                ),
-            ])
-        else:
-            transform = torchvision.transforms.Compose([
-                torchvision.transforms.ToTensor(),
-            ])
-        
-        # Create dataset
-        dataset = CocoDetectionMaskRCNNDataset(
-            root=split_dir,
-            annFile=ann_file,
-            transform=transform
-        )
-        
-        # Create dataloader
-        dataloader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=(split == 'train'),
-            num_workers=num_workers,
-            collate_fn=self._collate_fn
-        )
-        
-        return dataloader, dataset
-    
     def _collate_fn(self, batch):
         """
         Custom collate function for the dataloader.
@@ -405,31 +198,6 @@ class DataLoader:
         for split in ['train', 'valid', 'test']:
             try:
                 dataloader, dataset = self.load_coco_dataset(split, batch_size, num_workers)
-                dataloaders[split] = dataloader
-                datasets[split] = dataset
-            except FileNotFoundError:
-                print(f"Warning: Could not find {split} dataset, skipping.")
-        
-        return dataloaders, datasets
-    
-    def prepare_maskrcnn_datasets(self, batch_size=4, num_workers=4):
-        """
-        Prepare PyTorch datasets with mask annotations for Mask R-CNN training.
-        
-        Args:
-            batch_size (int): Batch size
-            num_workers (int): Number of worker threads
-        
-        Returns:
-            dict: Dictionary of dataloaders for each split
-            dict: Dictionary of datasets for each split
-        """
-        dataloaders = {}
-        datasets = {}
-        
-        for split in ['train', 'valid', 'test']:
-            try:
-                dataloader, dataset = self.load_maskrcnn_dataset(split, batch_size, num_workers)
                 dataloaders[split] = dataloader
                 datasets[split] = dataset
             except FileNotFoundError:
@@ -557,51 +325,6 @@ class DataLoader:
                 f.write(f"  {i}: {name}\n")
         
         print(f"Created YOLOv8 dataset.yaml configuration file")
-        
-        return str(output_dir)
-    
-    def prepare_maskrcnn_format(self, annotations, output_dir="data_maskrcnn"):
-        """
-        Prepare data for Mask R-CNN format.
-        
-        Args:
-            annotations (dict): Dictionary of annotations for each split
-            output_dir (str): Output directory for Mask R-CNN data
-        
-        Returns:
-            str: Path to the output directory
-        """
-        output_dir = Path(output_dir)
-        output_dir.mkdir(exist_ok=True, parents=True)
-        
-        # Process each split
-        for split in ['train', 'valid', 'test']:
-            if split not in annotations:
-                continue
-                
-            split_dir = output_dir / split
-            split_dir.mkdir(exist_ok=True)
-            
-            # Save annotations
-            ann_file = split_dir / "_annotations.coco.json"
-            with open(ann_file, 'w') as f:
-                json.dump(annotations[split], f, indent=2)
-            
-            print(f"Processed {split} split for Mask R-CNN format")
-        
-        # Create dataset.yaml file
-        yaml_path = output_dir / 'dataset.yaml'
-        yaml_content = {
-            'path': str(output_dir.absolute()),
-            'train': str((output_dir / 'train').absolute()),
-            'val': str((output_dir / 'valid').absolute()),
-            'test': str((output_dir / 'test').absolute()),
-            'nc': len(annotations['train']['categories']) if 'train' in annotations else 0,
-            'names': [cat['name'] for cat in annotations['train']['categories']] if 'train' in annotations else []
-        }
-        
-        with open(yaml_path, 'w') as f:
-            yaml.safe_dump(yaml_content, f, sort_keys=False)
         
         return str(output_dir)
     
