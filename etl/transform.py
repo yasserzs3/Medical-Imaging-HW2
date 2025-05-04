@@ -710,7 +710,7 @@ class DataTransformer:
         Convert dataset to SSD format.
         
         Args:
-            annotations (dict): Annotations dictionary
+            annotations (dict): Dictionary of annotations for each split
             image_paths (dict): Dictionary of image paths for each split
             output_dir (str): Output directory
             apply_augmentation (bool): Whether to apply augmentation
@@ -719,195 +719,54 @@ class DataTransformer:
             dict: Dataset statistics
         """
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(exist_ok=True, parents=True)
         
-        # Create directories for each split
+        # Create directories for each output split: train, valid, test
         for split in ['train', 'valid', 'test']:
-            split_dir = output_dir / split
-            split_dir.mkdir(exist_ok=True)
-        
-        # Process each split
+            (output_dir / split).mkdir(exist_ok=True, parents=True)
+
+        # Determine categories from annotations
+        # annotations is a dict of split_name -> split_annotations
+        first_split = next((s for s in ['train', 'valid', 'test'] if s in annotations), None)
+        if not first_split:
+            raise ValueError("No annotation splits found in annotations")
+        categories = annotations[first_split].get('categories', [])
+        if not categories:
+            raise ValueError(f"No categories found in annotations[{first_split}]")
+
+        # Create dataset.yaml
+        dataset_yaml = {
+            'path': str(output_dir),
+            'train': 'train',
+            'valid': 'valid',
+            'test': 'test',
+            'names': {cat['id']: cat['name'] for cat in categories}
+        }
+        with open(output_dir / 'dataset.yaml', 'w') as f:
+            yaml.safe_dump(dataset_yaml, f)
+
         stats = {}
+        # Process each split: train, valid, test
         for split in ['train', 'valid', 'test']:
             if split not in annotations:
+                print(f"Warning: {split} split not found in annotations")
                 continue
-                
-            split_annotations = annotations[split]
-            split_image_paths = image_paths[split]
-            split_dir = output_dir / split
-            
-            # Create a map from file_name to image_id and path
-            file_to_info = {}
-            for path in split_image_paths:
-                file_name = Path(path).name
-                file_to_info[file_name] = {
-                    'path': path,
-                    'id': None
-                }
-            
-            # Update with image IDs from annotations
-            for img in split_annotations['images']:
-                if img['file_name'] in file_to_info:
-                    file_to_info[img['file_name']]['id'] = img['id']
-            
-            # Create a map from image_id to its annotations
-            id_to_annos = {}
-            for anno in split_annotations['annotations']:
-                image_id = anno['image_id']
-                if image_id not in id_to_annos:
-                    id_to_annos[image_id] = []
-                id_to_annos[image_id].append(anno)
-            
-            # Process each image
-            processed_count = 0
-            processed_data = []
-            
-            for image_info in split_annotations['images']:
-                file_name = image_info['file_name']
-                
-                # Get image path from our mapping
-                if file_name not in file_to_info:
-                    print(f"Warning: Image {file_name} not found in image paths")
-                    continue
-                    
-                image_path = file_to_info[file_name]['path']
-                image_id = file_to_info[file_name]['id']
-                
-                # Load and process image
-                try:
-                    image = Image.open(image_path).convert('RGB')
-                except Exception as e:
-                    print(f"Error loading image {image_path}: {e}")
-                    continue
-                
-                # Get annotations for this image
-                img_annos = id_to_annos.get(image_id, [])
-                if not img_annos:
-                    print(f"Warning: No annotations found for image {file_name}")
-                    continue
-                
-                # Extract bounding boxes and category IDs
-                boxes = []
-                labels = []
-                for anno in img_annos:
-                    bbox = anno['bbox']  # [x, y, width, height]
-                    x1 = bbox[0] / image_info['width']
-                    y1 = bbox[1] / image_info['height']
-                    x2 = (bbox[0] + bbox[2]) / image_info['width']
-                    y2 = (bbox[1] + bbox[3]) / image_info['height']
-                    
-                    boxes.append([x1, y1, x2, y2])
-                    labels.append(anno['category_id'])
-                
-                # Convert to tensors
-                boxes = torch.tensor(boxes, dtype=torch.float32)
-                labels = torch.tensor(labels, dtype=torch.long)
-                
-                # Process the base image
-                processed_filename = f"{processed_count:06d}.jpg"
-                processed_img_path = split_dir / processed_filename
-                
-                # Transform image for SSD
-                image_tensor = transforms.Compose([
-                    transforms.Resize((300, 300)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                      std=[0.229, 0.224, 0.225])
-                ])(image)
-                
-                # Save the processed image
-                img_to_save = transforms.ToPILImage()(image_tensor)
-                img_to_save.save(processed_img_path)
-                
-                # Save the annotations
-                anno_filename = f"{processed_count:06d}.txt"
-                anno_path = split_dir / anno_filename
-                
-                with open(anno_path, 'w') as f:
-                    for box, label in zip(boxes, labels):
-                        # Convert box coordinates to YOLO format
-                        x1, y1, x2, y2 = box.tolist()
-                        w = x2 - x1
-                        h = y2 - y1
-                        x_center = x1 + w/2
-                        y_center = y1 + h/2
-                        
-                        # Write to file: class_id, x_center, y_center, width, height
-                        f.write(f"{label.item()} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
-                
-                processed_data.append((image_tensor, (boxes, labels)))
-                processed_count += 1
-                
-                # Apply augmentations for training data
-                if split == 'train' and apply_augmentation:
-                    for aug_idx in range(2):  # Create 2 augmented versions per image
-                        aug_img_filename = f"{processed_count:06d}.jpg"
-                        
-                        # Apply augmentation transform to original image
-                        aug_image, aug_bboxes, aug_category_ids = self.transform_image(
-                            np.array(image), boxes.tolist(), labels.tolist(), augment=True
-                        )
-                        
-                        # Transform augmented image for SSD
-                        aug_image_tensor = transforms.Compose([
-                            transforms.Resize((300, 300)),
-                            transforms.ToTensor(),
-                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                              std=[0.229, 0.224, 0.225])
-                        ])(Image.fromarray(aug_image))
-                        
-                        # Save augmented image
-                        aug_img_to_save = transforms.ToPILImage()(aug_image_tensor)
-                        aug_output_path = split_dir / aug_img_filename
-                        aug_img_to_save.save(aug_output_path)
-                        
-                        # Create annotation file for augmented image
-                        aug_anno_filename = f"{processed_count:06d}.txt"
-                        aug_anno_path = split_dir / aug_anno_filename
-                        
-                        with open(aug_anno_path, 'w') as f:
-                            for box, label in zip(aug_bboxes, aug_category_ids):
-                                # Convert box coordinates to YOLO format
-                                x1, y1, w, h = box  # Already normalized by transform
-                                x2, y2 = x1 + w, y1 + h
-                                x_center = x1 + w/2
-                                y_center = y1 + h/2
-                                
-                                # Write to file: class_id, x_center, y_center, width, height
-                                f.write(f"{label} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
-                        
-                        processed_data.append((aug_image_tensor, (torch.tensor(aug_bboxes), torch.tensor(aug_category_ids))))
-                        processed_count += 1
-            
-            print(f"Processed {split} split: {processed_count} images")
-            
-            # Save dataset statistics
-            stats[split] = {
-                'num_images': processed_count,
-                'num_annotations': sum(len(annos) for annos in id_to_annos.values()),
-                'categories': {cat['id']: cat['name'] for cat in split_annotations['categories']},
-                'category_counts': {cat['id']: 0 for cat in split_annotations['categories']}
-            }
-            
-            # Update category counts
-            for annos in id_to_annos.values():
-                for anno in annos:
-                    stats[split]['category_counts'][anno['category_id']] += 1
-        
-        # Create dataset.yaml file
-        yaml_path = output_dir / 'dataset.yaml'
-        yaml_content = {
-            'path': str(output_dir.absolute()),
-            'train': str((output_dir / 'train').absolute()),
-            'val': str((output_dir / 'valid').absolute()),
-            'test': str((output_dir / 'test').absolute()),
-            'nc': len(stats['train']['categories']) if 'train' in stats else 0,
-            'names': [name for _, name in sorted(stats['train']['categories'].items())] if 'train' in stats else []
-        }
-        
-        with open(yaml_path, 'w') as f:
-            yaml.safe_dump(yaml_content, f, sort_keys=False)
-        
+            split_ann = annotations[split]
+            split_paths = image_paths.get(split, [])
+            # Transform dataset for this split
+            transformed = self.transform_dataset(
+                split_ann,
+                split_paths,
+                split,
+                apply_augmentation=(split == 'train' and apply_augmentation)
+            )
+            # Save COCO format annotations
+            ann_path = output_dir / split / '_annotations.coco.json'
+            with open(ann_path, 'w') as f:
+                json.dump(transformed, f)
+            # Compute statistics for this split
+            stats[split] = self.get_dataset_stats({split: transformed})[split]
+
         return stats
 
 

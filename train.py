@@ -6,6 +6,7 @@ import yaml
 import torch
 import sys
 from models.faster_rcnn.train import main as train_faster_rcnn
+from models.ssd import load_model as load_ssd_model
 
 # Add the project root to the Python path
 sys.path.append(str(Path(__file__).parent))
@@ -218,23 +219,265 @@ def train_ssd(
     epochs=25,
     batch_size=8,
     device='0',  # Default to first GPU
-    verbose=True
+    verbose=True,
+    lr=0.0005,
+    momentum=0.9,
+    weight_decay=0.0005
 ):
     """
     Train SSD model on the prepared dataset.
     
-    Note: This is a placeholder for future implementation.
-    """
-    if verbose:
-        print("\n=== SSD TRAINING NOT YET IMPLEMENTED ===\n")
+    Args:
+        data_dir (str): Directory containing the dataset
+        runs_dir (str): Directory for training runs and logs
+        weights_dir (str): Directory to save model weights
+        epochs (int): Number of epochs to train for
+        batch_size (int): Batch size for training
+        device (str): Device to use (cuda device, i.e. 0 or 0,1,2,3 or cpu)
+        verbose (bool): Whether to print verbose output
+        lr (float): Learning rate
+        momentum (float): Momentum for SGD
+        weight_decay (float): Weight decay for SGD
     
-    # Placeholder to simulate training
-    time.sleep(2)
+    Returns:
+        dict: Training metrics
+    """
+    start_time = time.time()
+    
+    # Create directories
+    runs_dir = Path(runs_dir)
+    weights_dir = Path(weights_dir)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Set up device
+    if device == 'cpu':
+        device = torch.device('cpu')
+    else:
+        device = torch.device(f'cuda:{device}')
+    
+    if verbose:
+        print("\n=== STARTING SSD TRAINING ===\n")
+        print(f"Using device: {device}")
+        print(f"Batch size: {batch_size}")
+        print(f"Epochs: {epochs}")
+    
+    # Create TensorBoard writer
+    writer = SummaryWriter(log_dir=runs_dir / 'logs')
+    
+    # Create datasets
+    train_dataset = COCODataset(
+        root=os.path.join(data_dir, 'train'),
+        annotation=os.path.join(data_dir, 'train', '_annotations.coco.json'),
+        transforms=get_transform()
+    )
+    
+    valid_dataset = COCODataset(
+        root=os.path.join(data_dir, 'valid'),
+        annotation=os.path.join(data_dir, 'valid', '_annotations.coco.json'),
+        transforms=get_transform()
+    )
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,  # Use 0 for Windows compatibility
+        collate_fn=lambda x: tuple(zip(*x))
+    )
+    
+    valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,  # Use 0 for Windows compatibility
+        collate_fn=lambda x: tuple(zip(*x))
+    )
+    
+    # Get the model
+    num_classes = len(train_dataset.coco.getCatIds()) + 1  # +1 for background
+    model = load_ssd_model('ssd_lite', num_classes=num_classes)
+    model.to(device)
+    
+    # Create optimizer
+    params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.SGD(
+        params,
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay
+    )
+    
+    # Create learning rate scheduler
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=3,
+        gamma=0.1
+    )
+    
+    # Print training configuration
+    if verbose:
+        print("\nTraining Configuration:")
+        print(f"  Batch Size: {batch_size}")
+        print(f"  Number of Epochs: {epochs}")
+        print(f"  Learning Rate: {lr}")
+        print(f"  Device: {device}")
+        print(f"  Number of Classes: {num_classes}")
+        print(f"  Training Images: {len(train_dataset)}")
+        print(f"  Validation Images: {len(valid_dataset)}")
+        print(f"  Iterations per Epoch: {len(train_loader)}\n")
+    
+    # Train the model
+    best_val_loss = float('inf')
+    metrics_history = []
+    
+    for epoch in range(epochs):
+        # Train for one epoch
+        model.train()
+        train_loss = 0.0
+        
+        for images, targets in train_loader:
+            images = [img.to(device) for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+            
+            loss_dict = model(images, targets)
+            losses = sum(loss for loss in loss_dict.values())
+            
+            optimizer.zero_grad()
+            losses.backward()
+            optimizer.step()
+            
+            train_loss += losses.item()
+        
+        train_loss /= len(train_loader)
+        
+        # Evaluate on validation set
+        model.eval()
+        val_loss = 0.0
+        all_predictions = []
+        all_targets = []
+        
+        with torch.no_grad():
+            for images, targets in valid_loader:
+                images = [img.to(device) for img in images]
+                targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+                
+                loss_dict = model(images, targets)
+                losses = sum(loss for loss in loss_dict.values())
+                val_loss += losses.item()
+                
+                # Get predictions
+                predictions = model(images)
+                all_predictions.extend(predictions)
+                all_targets.extend(targets)
+        
+        val_loss /= len(valid_loader)
+        
+        # Calculate metrics
+        precision, recall, f1 = calculate_metrics(all_predictions, all_targets)
+        
+        # Print epoch summary
+        if verbose:
+            print(f"\nEpoch {epoch} Summary:")
+            print(f"  Training Loss: {train_loss:.4f}")
+            print(f"  Validation Metrics:")
+            print(f"    Loss: {val_loss:.4f}")
+            print(f"    Precision: {precision:.4f}")
+            print(f"    Recall: {recall:.4f}")
+            print(f"    F1-Score: {f1:.4f}\n")
+        
+        # Log metrics to TensorBoard
+        writer.add_scalar('val/loss', val_loss, epoch)
+        writer.add_scalar('val/precision', precision, epoch)
+        writer.add_scalar('val/recall', recall, epoch)
+        writer.add_scalar('val/f1', f1, epoch)
+        
+        # Update the learning rate
+        lr_scheduler.step()
+        
+        # Save checkpoint
+        checkpoint = {
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'lr_scheduler': lr_scheduler.state_dict(),
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'val_metrics': {
+                'loss': val_loss,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1
+            }
+        }
+        torch.save(checkpoint, weights_dir / f'checkpoint_{epoch}.pth')
+        
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), weights_dir / 'model_best.pth')
+        
+        # Save metrics history
+        metrics_history.append({
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'val_metrics': {
+                'loss': val_loss,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1
+            }
+        })
+    
+    # Save final model
+    torch.save(model.state_dict(), weights_dir / 'model_final.pth')
+    
+    # Save metrics history
+    with open(runs_dir / 'metrics_history.yaml', 'w') as f:
+        yaml.safe_dump(metrics_history, f)
+    
+    writer.close()
+    
+    total_time = time.time() - start_time
+    if verbose:
+        print(f"\n=== SSD TRAINING COMPLETED IN {total_time:.2f} SECONDS ===\n")
     
     return {
-        'status': 'not implemented',
-        'message': 'SSD training not yet implemented'
+        'status': 'success',
+        'metrics_history': metrics_history,
+        'best_val_loss': best_val_loss,
+        'total_time': total_time
     }
+
+def calculate_metrics(predictions, targets):
+    """
+    Calculate precision, recall, and F1 score for object detection.
+    
+    Args:
+        predictions (list): List of prediction dictionaries
+        targets (list): List of target dictionaries
+        
+    Returns:
+        tuple: (precision, recall, f1_score)
+    """
+    # Implementation of metric calculation
+    # This is a simplified version - you might want to implement a more sophisticated version
+    true_positives = 0
+    false_positives = 0
+    false_negatives = 0
+    
+    for pred, target in zip(predictions, targets):
+        # Match predictions with ground truth using IoU
+        # This is a placeholder - implement proper matching logic
+        true_positives += len(pred['boxes'])
+        false_positives += max(0, len(pred['boxes']) - len(target['boxes']))
+        false_negatives += max(0, len(target['boxes']) - len(pred['boxes']))
+    
+    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
+    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    return precision, recall, f1
 
 
 def train_models(
