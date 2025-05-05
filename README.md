@@ -1,42 +1,77 @@
 # Medical Imaging Object Detection Project
 
-This project provides a complete pipeline for processing medical imaging data and training object detection models on it.
+A comprehensive pipeline for medical image object detection, supporting multiple state-of-the-art models including YOLOv8, Faster R-CNN, and SSD. The project provides a complete ETL pipeline for processing medical images and training object detection models.
+
+## Features
+
+- Multi-model support:
+  - YOLOv8 (Ultralytics implementation)
+  - Faster R-CNN (PyTorch implementation)
+  - SSD (TensorFlow implementation)
+- Complete ETL pipeline for medical image processing
+- Data augmentation and normalization capabilities
+- Comprehensive training pipeline with metrics tracking
+- TensorBoard integration for training visualization
+- Support for COCO format annotations
 
 ## Project Structure
 
-- `etl.py` - Extract, Transform, Load pipeline for processing raw medical images into model-ready datasets
-- `train.py` - Multi-model training script that supports training YOLOv8, Mask R-CNN, and SSD models
-- `models/` - Model-specific implementations and trained model weights
-  - `models/yolov8/` - YOLOv8 implementation
-    - `models/yolov8/yolo_train.py` - YOLOv8 training script
-    - `models/yolov8/weights/` - Saved YOLOv8 model weights
-  - `models/r-cnn/` - Mask R-CNN implementation (placeholder for future development)
-  - `models/ssd/` - SSD implementation (placeholder for future development)
-- `data/` - Data directories
-  - `data/raw/` - Raw input data in COCO format
-  - `data/processed/` - Processed datasets ready for model training
-  - `data/runs/` - Training run logs and intermediate results
-- `etl/` - ETL modules
-  - `etl/extract.py` - Data extraction functionality
-  - `etl/transform.py` - Data transformation and augmentation
-  - `etl/load.py` - Data loading for training
+```
+├── etl.py                 # Main ETL pipeline script
+├── train.py              # Multi-model training script
+├── infer.py              # Model inference script
+├── models/               # Model implementations
+│   ├── yolov8/          # YOLOv8 implementation
+│   ├── faster_rcnn/     # Faster R-CNN implementation
+│   └── ssd/             # SSD implementation
+├── data/                 # Data directories
+│   ├── raw/             # Raw input data (COCO format)
+│   ├── processed/       # Processed datasets
+│   └── runs/            # Training logs and results
+└── etl/                 # ETL modules
+    ├── extract.py       # Data extraction
+    ├── transform.py     # Data transformation
+    └── load.py          # Data loading
+```
+
+## Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/medical-imaging-detection.git
+cd medical-imaging-detection
+```
+
+2. Create and activate a virtual environment (recommended):
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
 ## Usage
 
-### Data Preparation (ETL)
+### 1. Data Preparation (ETL)
 
-Prepare your data for model training:
+Prepare your medical imaging data for model training:
 
 ```bash
 python etl.py --data-dir data/raw --output-dir data/processed --model yolo --apply-augmentation
 ```
 
-Options:
-- `--model`: Model format to generate data for (`yolo`, `maskrcnn`, `ssd`)
-- `--apply-augmentation`: Apply data augmentation techniques
-- `--apply-normalization`: Apply normalization to images
+#### ETL Options:
+- `--data-dir`: Input data directory (default: `data/raw`)
+- `--output-dir`: Output directory for processed data (default: `data/processed`)
+- `--model`: Target model format (`yolo`, `ssd`) - can be specified multiple times
+- `--apply-augmentation`: Enable data augmentation
+- `--apply-normalization`: Enable image normalization
+- `--quiet`: Suppress verbose output
 
-### Training Models
+### 2. Model Training
 
 Train object detection models:
 
@@ -44,22 +79,41 @@ Train object detection models:
 python train.py --model yolo --epochs 50 --batch-size 16
 ```
 
-Options:
-- `--model`: Model to train (`yolo`, `maskrcnn`, `ssd`)
-- `--runs-dir`: Directory for training runs and logs (default: `data/runs`)
-- `--models-dir`: Directory for model weights (default: `models`)
+#### Training Options:
+- `--model`: Model architecture (`yolo`, `faster_rcnn`, `ssd`)
+- `--runs-dir`: Training logs directory (default: `data/runs`)
+- `--models-dir`: Model weights directory (default: `models`)
 - `--yolo-size`: YOLOv8 model size (`n`, `s`, `m`, `l`, `x`)
 - `--epochs`: Number of training epochs
-- `--batch-size`: Batch size for training
-- `--device`: Device to use (e.g., `0` or `0,1,2,3` or `cpu`)
+- `--batch-size`: Training batch size
+- `--device`: Training device (`0`, `0,1,2,3`, or `cpu`)
 
-### Training YOLOv8 Only
+### 3. Model Inference
 
-For a more focused YOLOv8 training:
+Run inference on new images:
 
 ```bash
-python models/yolov8/yolo_train.py --model-size n --epochs 50 --batch-size 16
+python infer.py --model yolo --weights models/yolov8/weights/model_best.pth --input data/test_images
 ```
+
+## Dependencies
+
+- PyTorch >= 1.9.0
+- Torchvision >= 0.10.0
+- Ultralytics (YOLOv8) >= 8.0.0
+- TensorFlow >= 2.8.0
+- TensorFlow Object Detection API >= 0.1.1
+- Albumentations >= 1.0.0
+- OpenCV >= 4.5.0
+- NumPy >= 1.20.0
+- Pillow >= 8.0.0
+- PyYAML >= 6.0
+- pycocotools >= 2.0.0
+- TensorBoard >= 2.8.0
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 Options:
 - `--data-dir`: Directory with YOLOv8 format data (default: `data/processed/yolo`)

@@ -104,7 +104,8 @@ class COCODataset(torch.utils.data.Dataset):
             
             boxes = []
             labels = []
-            
+            valid_anns = [] # Keep track of valid annotations
+
             for ann in anns:
                 bbox = ann['bbox']  # [x, y, width, height]
                 category_id = ann['category_id']
@@ -113,19 +114,42 @@ class COCODataset(torch.utils.data.Dataset):
                 if category_id not in self.categories:
                     continue
                 
-                boxes.append(bbox)
-                labels.append(category_id)
-            
-            # Validate and convert boxes
-            boxes = self._validate_boxes(boxes, img_width, img_height)
-            
-            if len(boxes) == 0:
+                # Preliminary validation (e.g., basic format check if needed)
+                # ...
+
+                valid_anns.append({'bbox': bbox, 'category_id': category_id})
+
+
+            # Validate boxes and keep corresponding labels
+            validated_boxes = []
+            validated_labels = []
+            for ann_data in valid_anns:
+                box = ann_data['bbox']
+                label = ann_data['category_id']
+
+                x1, y1, w, h = box
+                # Ensure box is within image boundaries
+                x1 = max(0, min(x1, img_width - 1))
+                y1 = max(0, min(y1, img_height - 1))
+                w = min(w, img_width - x1)
+                h = min(h, img_height - y1)
+
+                # Skip invalid boxes AND their labels
+                if w <= 0 or h <= 0:
+                    continue
+
+                # Convert to [x1, y1, x2, y2] format and store
+                validated_boxes.append([x1, y1, x1 + w, y1 + h])
+                validated_labels.append(label)
+
+
+            if len(validated_boxes) == 0:
                 boxes = torch.zeros((0, 4), dtype=torch.float32)
                 labels = torch.zeros(0, dtype=torch.int64)
             else:
-                boxes = torch.as_tensor(boxes, dtype=torch.float32)
-                labels = torch.as_tensor(labels, dtype=torch.int64)
-            
+                boxes = torch.as_tensor(validated_boxes, dtype=torch.float32)
+                labels = torch.as_tensor(validated_labels, dtype=torch.int64) # Use validated labels
+
             target = {}
             target["boxes"] = boxes
             target["labels"] = labels
